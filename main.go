@@ -280,7 +280,42 @@ func listDownloadDir() error {
         return fmt.Errorf("获取目录列表失败，状态码: %d", resp.StatusCode)
     }
 
-    log.Println("成功获取目录列表")
+    // 读取响应内容
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        log.Printf("读取目录列表响应内容时出错: %v", err)
+        return err
+    }
+
+    // 解析JSON
+    var result map[string]interface{}
+    err = json.Unmarshal(body, &result)
+    if err != nil {
+        log.Printf("解析目录列表JSON数据时出错: %v", err)
+        return err
+    }
+
+    // 打印目录内容到日志 - 简化版，只显示文件名
+    log.Println("目录内容:")
+    data, ok := result["data"].(map[string]interface{})
+    if ok {
+        content, ok := data["content"].([]interface{})
+        if ok {
+            log.Printf("目录 %s 中共有 %d 个文件:", config.OfflineDownloadDir, len(content))
+            for _, item := range content {
+                fileInfo, ok := item.(map[string]interface{})
+                if ok {
+                    name, _ := fileInfo["name"].(string)
+                    log.Printf("- %s", name)
+                }
+            }
+        } else {
+            log.Println("无法解析目录内容")
+        }
+    } else {
+        log.Println("无法解析返回数据")
+    }
+
     return nil
 }
 
@@ -336,10 +371,22 @@ func processMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
         msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ 离线下载任务添加成功！")
         bot.Send(msg)
         
-        // 在成功添加后列出目录内容
-        if err := listDownloadDir(); err != nil {
-            log.Printf("列出目录内容时出错: %v", err)
-        }
+        // 在成功添加后列出目录内容，并在接下来的9秒内每3秒刷新一次，共3次
+        go func() {
+            // 立即刷新一次
+            if err := listDownloadDir(); err != nil {
+                log.Printf("列出目录内容时出错: %v", err)
+            }
+            
+            // 然后每隔3秒刷新一次，共刷新2次
+            for i := 0; i < 2; i++ {
+                time.Sleep(3 * time.Second)
+                log.Printf("第 %d 次刷新目录...", i+2)
+                if err := listDownloadDir(); err != nil {
+                    log.Printf("列出目录内容时出错: %v", err)
+                }
+            }
+        }()
     } else {
         msg := tgbotapi.NewMessage(update.Message.Chat.ID, "❌ 添加离线下载任务失败")
         bot.Send(msg)
