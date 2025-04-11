@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: alist-thunderx-bot
+    env: docker
+    plan: free
+    healthCheckPath: /
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: BOT_USERNAME
+        sync: false
+      - key: BOT_PASSWORD
+        sync: false
+      - key: BOT_BASE_URL
+        sync: false
+      - key: BOT_SEARCH_URL
+        sync: false
+      - key: BOT_OFFLINE_DOWNLOAD_DIR
+        sync: false
+      - key: BOT_TELEGRAM_TOKEN
+        sync: false 

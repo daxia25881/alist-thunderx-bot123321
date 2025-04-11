@@ -1,0 +1,8 @@
+{
+    "username": "your_alist_username",
+    "password": "your_alist_password",
+    "base_url": "http://your_alist_instance:port/",
+    "search_url": "http://your_search_api_url/api/search?keyword=",
+    "offline_download_dir": "/thunderx/我的云盘",
+    "telegram_token": "your_telegram_bot_token"
+} 
