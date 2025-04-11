@@ -235,12 +235,12 @@ func addMagnet(magnet string) bool {
     return false
 }
 
-// listDownloadDir 列出离线下载目录内容
-func listDownloadDir() error {
+// listDownloadDir 列出离线下载目录内容，返回文件数量
+func listDownloadDir() (int, error) {
     token, err := getToken()
     if err != nil || token == "" {
         log.Println("错误: token 为空，无法列出目录内容")
-        return err
+        return 0, err
     }
 
     url := config.BaseURL + "api/fs/list"
@@ -256,14 +256,14 @@ func listDownloadDir() error {
     payload, err := json.Marshal(postData)
     if err != nil {
         log.Printf("目录列表数据 JSON 编码时出错: %v", err)
-        return err
+        return 0, err
     }
 
     client := http.Client{Timeout: 10 * time.Second}
     req, err := http.NewRequest("POST", url, strings.NewReader(string(payload)))
     if err != nil {
         log.Printf("创建请求时出错: %v", err)
-        return err
+        return 0, err
     }
     req.Header.Set("Authorization", token)
     req.Header.Set("Content-Type", "application/json")
@@ -271,20 +271,20 @@ func listDownloadDir() error {
     resp, err := client.Do(req)
     if err != nil {
         log.Printf("获取目录列表时出错: %v", err)
-        return err
+        return 0, err
     }
     defer resp.Body.Close()
 
     if resp.StatusCode != http.StatusOK {
         log.Printf("获取目录列表失败，状态码: %d", resp.StatusCode)
-        return fmt.Errorf("获取目录列表失败，状态码: %d", resp.StatusCode)
+        return 0, fmt.Errorf("获取目录列表失败，状态码: %d", resp.StatusCode)
     }
 
     // 读取响应内容
     body, err := io.ReadAll(resp.Body)
     if err != nil {
         log.Printf("读取目录列表响应内容时出错: %v", err)
-        return err
+        return 0, err
     }
 
     // 解析JSON
@@ -292,31 +292,34 @@ func listDownloadDir() error {
     err = json.Unmarshal(body, &result)
     if err != nil {
         log.Printf("解析目录列表JSON数据时出错: %v", err)
-        return err
+        return 0, err
     }
 
     // 打印目录内容到日志 - 简化版，只显示文件名
     log.Println("目录内容:")
     data, ok := result["data"].(map[string]interface{})
-    if ok {
-        content, ok := data["content"].([]interface{})
-        if ok {
-            log.Printf("目录 %s 中共有 %d 个文件:", config.OfflineDownloadDir, len(content))
-            for _, item := range content {
-                fileInfo, ok := item.(map[string]interface{})
-                if ok {
-                    name, _ := fileInfo["name"].(string)
-                    log.Printf("- %s", name)
-                }
-            }
-        } else {
-            log.Println("无法解析目录内容")
-        }
-    } else {
+    if !ok {
         log.Println("无法解析返回数据")
+        return 0, fmt.Errorf("无法解析返回数据")
+    }
+    
+    content, ok := data["content"].([]interface{})
+    if !ok {
+        log.Println("无法解析目录内容")
+        return 0, fmt.Errorf("无法解析目录内容")
+    }
+    
+    fileCount := len(content)
+    log.Printf("目录 %s 中共有 %d 个文件:", config.OfflineDownloadDir, fileCount)
+    for _, item := range content {
+        fileInfo, ok := item.(map[string]interface{})
+        if ok {
+            name, _ := fileInfo["name"].(string)
+            log.Printf("- %s", name)
+        }
     }
 
-    return nil
+    return fileCount, nil
 }
 
 // 处理 /start 命令
@@ -371,20 +374,44 @@ func processMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
         msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ 离线下载任务添加成功！")
         bot.Send(msg)
         
-        // 在成功添加后列出目录内容，并在接下来的9秒内每3秒刷新一次，共3次
+        // 在成功添加后监控目录变化，直到检测到新文件或达到最大尝试次数
         go func() {
-            // 立即刷新一次
-            if err := listDownloadDir(); err != nil {
+            // 初始获取目录内容并记录文件数
+            initialCount, err := listDownloadDir()
+            if err != nil {
                 log.Printf("列出目录内容时出错: %v", err)
+                return
             }
             
-            // 然后每隔3秒刷新一次，共刷新2次
-            for i := 0; i < 2; i++ {
+            lastCount := initialCount
+            maxAttempts := 10
+            
+            // 循环检查目录，直到文件数变化或达到最大尝试次数
+            for attempt := 1; attempt < maxAttempts; attempt++ {
                 time.Sleep(3 * time.Second)
-                log.Printf("第 %d 次刷新目录...", i+2)
-                if err := listDownloadDir(); err != nil {
+                log.Printf("第 %d 次检查目录...", attempt + 1)
+                
+                currentCount, err := listDownloadDir()
+                if err != nil {
                     log.Printf("列出目录内容时出错: %v", err)
+                    continue
                 }
+                
+                // 如果文件数发生变化，记录并继续监控
+                if currentCount != lastCount {
+                    log.Printf("检测到目录文件数量变化: %d -> %d", lastCount, currentCount)
+                    lastCount = currentCount
+                }
+                
+                // 如果文件数比初始状态增加，说明有新文件上传完成
+                if currentCount > initialCount {
+                    log.Printf("检测到新文件上传完成，停止监控")
+                    break
+                }
+            }
+            
+            if lastCount <= initialCount {
+                log.Printf("监控结束，没有检测到新文件上传")
             }
         }()
     } else {
